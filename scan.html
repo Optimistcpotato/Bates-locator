@@ -23,6 +23,7 @@
   .skip { display:block; padding:13px; margin:22px 0 8px; border:1px solid #173e76;
     text-decoration:none; border-radius:8px }
   .fine { color:#65717e; font-size:12px }
+  .retry { display:none; width:100%; margin:12px 0 4px; padding:12px; font:inherit; font-weight:700; color:#173e76; background:white; border:1px solid #173e76; border-radius:8px; cursor:pointer }
 </style>
 </head>
 <body>
@@ -31,6 +32,7 @@
   <h2>Opening Google Reviews…</h2>
   <div class="spinner" id="spinner" aria-hidden="true"></div>
   <p role="status" aria-live="polite" id="status">Preparing your review link…</p>
+  <button id="retry" class="retry" type="button">Request location permission</button>
   <div class="privacy">
     <strong>Optional, one-time location:</strong> This page asks your browser to share
     your current location for a Bates service-visit record. If you choose Allow,
@@ -73,6 +75,7 @@
   const legacy = !direct && uuid.test(existingVisit);
   const info = document.getElementById('status');
   const skip = document.getElementById('skip');
+  const retry = document.getElementById('retry');
   const form = document.getElementById('submit');
   const iframe = document.getElementById('response');
   let submitting = false;
@@ -81,11 +84,17 @@
   let ipPromise = null;
   let gpsPosition = null;
   let timeout = null;
+  let overallTimeout = null;
+  let retryTimeout = null;
+  let retryPending = false;
+  let gpsPermissionMessage = "";
 
   function message(s) { info.textContent = s; }
   function reviews() {
     if (redirected) return;
     redirected = true;
+    clearTimeout(overallTimeout);
+    clearTimeout(retryTimeout);
     location.replace(reviewUrl);
   }
   function setField(id, val) { document.getElementById(id).value = String(val == null ? '' : val); }
@@ -129,16 +138,54 @@
   }
   function geo() {
     return new Promise(resolve => {
-      if(!window.isSecureContext || !navigator.geolocation) {resolve(null);return;}
+      if(!window.isSecureContext || !navigator.geolocation) {
+        resolve({coords:null,code:0,reason:'Location is not supported by this browser.'});
+        return;
+      }
       try {
         navigator.geolocation.getCurrentPosition(
-          p => resolve(p && p.coords || null),
-          e => resolve(null),
+          p => resolve({coords:p && p.coords || null,code:0,reason:''}),
+          e => resolve({coords:null,code:Number(e && e.code)||0,reason:String(e && e.message || '').slice(0,100)}),
           {enableHighAccuracy:true,timeout:15000,maximumAge:0}
         );
-      } catch(_) {resolve(null);}
+      } catch(e) {
+        resolve({coords:null,code:0,reason:'Location request could not start.'});
+      }
     });
   }
+  async function permissionState() {
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        const result=await navigator.permissions.query({name:'geolocation'});
+        return result && result.state || 'unknown';
+      }
+    } catch(_) {}
+    return 'unknown';
+  }
+  function manualFallback() {
+    if(retryPending || submitting || redirected || skipped) return;
+    retryPending=true;
+    retry.style.display='block';
+    message('Your browser did not complete the automatic location request. Tap “Request location permission” if you want to share, or continue to Reviews without sharing.');
+    retryTimeout=setTimeout(function() {
+      if(retryPending && !submitting && !redirected) {
+        retryPending=false;
+        retry.style.display='none';
+        finalize(null).catch(reviews);
+      }
+    },6500);
+  }
+  retry.addEventListener('click',function() {
+    if(!retryPending || submitting || redirected || skipped)return;
+    retryPending=false;
+    retry.style.display='none';
+    clearTimeout(retryTimeout);
+    message('Requesting optional location permission…');
+    geo().then(function(result) {
+      if(submitting || redirected || skipped)return;
+      finalize(result.coords).catch(reviews);
+    }).catch(function(){ finalize(null).catch(reviews); });
+  });
   function config() {
     return new Promise(resolve => {
       let settled=false;
@@ -167,6 +214,9 @@
       setField('ipStatus',ip.status||'Client unavailable');
       for(const f of ['city','region','country','detail'])setField(f,ip[f]||'');
     }
+    retryPending=false;
+    retry.style.display="none";
+    clearTimeout(retryTimeout);
     try { form.submit(); }
     catch(_){ reviews(); return; }
     timeout=setTimeout(reviews,12000);
@@ -205,11 +255,31 @@
     }
     if(skipped || redirected) return;
     message('Requesting optional location permission…');
-    const coords=await geo();
+    const result=await geo();
     if(skipped || redirected) return;
-    gpsPosition=coords;
-    await finalize(coords);
+    gpsPosition=result.coords;
+    if(result.coords) {
+      await finalize(result.coords);
+      return;
+    }
+    const pState=await permissionState();
+    if(skipped || redirected) return;
+    // A genuine denial skips immediately. Some browsers suppress an automatic
+    // permission dialog while the state is still "prompt": offer one tap.
+    if((result.code===1 || result.code===3) && pState==='prompt') {
+      manualFallback();
+      return;
+    }
+    await finalize(null);
   }
+  // Absolute escape hatch: browsers can delay permissions, network requests,
+  // or hidden-iframe navigation. Never trap a customer on the loading page.
+  overallTimeout=setTimeout(function(){
+    if(!redirected) {
+      message('Opening Google Reviews…');
+      reviews();
+    }
+  },36000);
   start().catch(e=>{message('Opening Google Reviews…');finalize(null).catch(reviews);});
 }());
 </script>
