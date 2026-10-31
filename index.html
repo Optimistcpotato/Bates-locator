@@ -26,6 +26,9 @@
     #send {display:none}
     #confirmed {display:none}
     .fine {color:#5d6976;font-size:12px;margin-top:22px}
+    .help {display:none;text-align:left;font-size:14px;line-height:1.5}
+    .help ol {padding-left:22px}
+    .help li {margin-bottom:8px}
   </style>
 </head>
 <body>
@@ -43,6 +46,16 @@
       <button type="button" class="primary" id="send">Send Location to Bates</button>
     </div>
   </div>
+  <section class="panel help" id="locationHelp" aria-live="polite">
+    <strong>iPhone location permission help</strong>
+    <ol>
+      <li>Open Settings &gt; Privacy &amp; Security &gt; Location Services. Make sure Location Services is on, and check Safari Websites if listed.</li>
+      <li>Open Settings &gt; Apps &gt; Safari &gt; Location and select Ask.</li>
+      <li>In Safari, open the page menu &gt; Website Settings for this site and set Location to Ask.</li>
+      <li>If you arrived through the Camera QR scanner, copy this page's full URL (including the visit parameter), open it in the Safari app, and try again.</li>
+    </ol>
+    <p class="sub">Your device must approve location access. Bates cannot override a denial; sharing remains optional.</p>
+  </section>
   <a class="secondary" href="https://g.page/r/CaOp_u0N2yIzEBM/review?utm_source=gbp&amp;utm_medium=reviews&amp;utm_campaign=qr" rel="noreferrer">Skip Location — Continue to Google Reviews</a>
   <p class="fine">Only tapping <strong>Send Location to Bates</strong> transmits coordinates to Bates. The page does not continuously monitor your location. Bates stores the coordinates only if the GPS master switch is enabled. The QR scan itself may separately record an approximate internet-based location.</p>
 </main>
@@ -60,6 +73,7 @@
   const send = document.getElementById('send');
   const msg = document.getElementById('message');
   const confirmed = document.getElementById('confirmed');
+  const locationHelp = document.getElementById('locationHelp');
   const accuracyMsg = document.getElementById('accuracy');
   const visit = new URLSearchParams(window.location.search).get('visit') || '';
   const valid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visit);
@@ -103,7 +117,12 @@
       const words = err.code === 1 ? 'Location permission denied or blocked.' :
         err.code === 2 ? 'The device could not determine its position.' :
         err.code === 3 ? 'The location request timed out.' : 'Location unavailable.';
-      message(words + ' You can try again or continue to Google Reviews.');
+      const code = Number(err && err.code) || 0;
+      const browserDetail = String(err && err.message || '').trim().slice(0,180);
+      message(words + ' (Error code ' + code + ').' +
+        (browserDetail ? ' Browser details: ' + browserDetail + '.' : '') +
+        ' You can try again or continue to Google Reviews.');
+      locationHelp.style.display = code === 1 ? 'block' : 'none';
     }, {enableHighAccuracy: true, timeout: 16000, maximumAge: 0});
   });
   send.addEventListener('click', function () {
