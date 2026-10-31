@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Bates Heating &amp; Air — Opening Google Reviews</title>
+<style>
+  * { box-sizing:border-box }
+  body { margin:0; background:#f4f7fa; color:#183451; padding:28px 14px;
+    font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif }
+  main { max-width:450px; margin: min(12vh,90px) auto; padding:32px 25px;
+    border-radius:16px; background:white; box-shadow:0 6px 24px #123d7717; text-align:center }
+  h1 { font-size:25px; margin:0 0 10px }
+  h2 { font-size:19px; margin:0 0 17px }
+  .spinner { margin:18px auto 20px; width:34px; height:34px; border:4px solid #d8e4f2;
+    border-top-color:#173e76; border-radius:50%; animation:spin .8s linear infinite }
+  @keyframes spin {to{transform:rotate(360deg)}}
+  #status { min-height:42px; color:#34546b; font-size:15px }
+  .privacy { text-align:left; background:#f6f9fc; border-radius:9px;
+    padding:14px; font-size:13px; color:#546474; margin-top:20px }
+  a { color:#173e76; font-weight:600 }
+  .skip { display:block; padding:13px; margin:22px 0 8px; border:1px solid #173e76;
+    text-decoration:none; border-radius:8px }
+  .fine { color:#65717e; font-size:12px }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bates Heating &amp; Air</h1>
+  <h2>Opening Google Reviews…</h2>
+  <div class="spinner" id="spinner" aria-hidden="true"></div>
+  <p role="status" aria-live="polite" id="status">Preparing your review link…</p>
+  <div class="privacy">
+    <strong>Optional, one-time location:</strong> This page asks your browser to share
+    your current location for a Bates service-visit record. If you choose Allow,
+    coordinates and device-reported accuracy are sent to Bates. If you deny, GPS
+    coordinates are not sent. A prior permission for this website may be reused
+    without another prompt. Your device may use GPS, Wi-Fi or cell towers.
+    No ongoing tracking is performed, and Bates cannot tell whether you submit a review.
+    Your approximate internet location may be recorded separately to count QR visits.
+  </div>
+  <a id="skip" class="skip" href="https://g.page/r/CaOp_u0N2yIzEBM/review?utm_source=gbp&amp;utm_medium=reviews&amp;utm_campaign=qr">Continue without sharing location</a>
+  <p class="fine">You can leave a review without sharing GPS coordinates.</p>
+</main>
+<iframe id="response" name="gpsSubmitResponse" title="GPS submission result" aria-hidden="true"
+  tabindex="-1" src="about:blank" style="display:none"></iframe>
+<form id="submit" method="POST" accept-charset="UTF-8" target="gpsSubmitResponse"
+  action="https://script.google.com/macros/s/AKfycbz_6pZS3Ku4H00_ru2cagjq4eNr8lTXmt8lElTarWZTX43uYrA9Ol4Cnz-ZnmERQWBWyg/exec">
+  <input type="hidden" name="action" id="action">
+  <input type="hidden" name="t" id="token">
+  <input type="hidden" name="visit" id="visit">
+  <input type="hidden" name="gpsApproved" id="gpsApproved" value="no">
+  <input type="hidden" name="latitude" id="latitude">
+  <input type="hidden" name="longitude" id="longitude">
+  <input type="hidden" name="accuracy" id="accuracy">
+  <input type="hidden" name="status" id="ipStatus">
+  <input type="hidden" name="city" id="city">
+  <input type="hidden" name="region" id="region">
+  <input type="hidden" name="country" id="country">
+  <input type="hidden" name="detail" id="detail">
+</form>
+<script>
+(function () {
+  'use strict';
+  const serviceUrl = document.getElementById('submit').action;
+  const reviewUrl = document.getElementById('skip').href;
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t') || '';
+  const existingVisit = params.get('visit') || '';
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const direct = uuid.test(token);
+  const legacy = !direct && uuid.test(existingVisit);
+  const info = document.getElementById('status');
+  const skip = document.getElementById('skip');
+  const form = document.getElementById('submit');
+  const iframe = document.getElementById('response');
+  let submitting = false;
+  let skipped = false;
+  let redirected = false;
+  let ipPromise = null;
+  let gpsPosition = null;
+  let timeout = null;
+
+  function message(s) { info.textContent = s; }
+  function reviews() {
+    if (redirected) return;
+    redirected = true;
+    location.replace(reviewUrl);
+  }
+  function setField(id, val) { document.getElementById(id).value = String(val == null ? '' : val); }
+  function shortError(e) { return String(e && e.message || e || '').slice(0,70); }
+  function randomUUID() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    if (!crypto.getRandomValues) return '';
+    const arr = crypto.getRandomValues(new Uint8Array(16));
+    arr[6] = (arr[6] & 15) | 64;
+    arr[8] = (arr[8] & 63) | 128;
+    const hex = Array.from(arr, b => b.toString(16).padStart(2,'0')).join('');
+    return hex.slice(0,8)+'-'+hex.slice(8,12)+'-'+hex.slice(12,16)+'-'+hex.slice(16,20)+'-'+hex.slice(20);
+  }
+  const visit = direct ? randomUUID() : existingVisit;
+  setField('action', direct ? 'directScan' : 'shareGPS');
+  setField('t', token);
+  setField('visit', visit);
+
+  function withTimeout(url, ms) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, {method:'GET',mode:'cors',credentials:'omit',cache:'no-store',signal:ctrl.signal})
+      .then(r => {if(!r.ok) throw new Error('HTTP '+r.status);return r.json()})
+      .finally(() => clearTimeout(timer));
+  }
+  async function ipEstimate() {
+    let a=null, b=null, errors=[];
+    try { a=await withTimeout('https://get.geojs.io/v1/ip/geo.json',3000); }
+    catch(e) {errors.push('GeoJS '+shortError(e));}
+    function clean(s) { const v=String(s||'').trim();return /^(unknown|n\/a|null|undefined)$/i.test(v)?'':v; }
+    let city=clean(a&&a.city),region=clean(a&&a.region),country=clean(a&&a.country),provider='GeoJS';
+    if(!city&&!region) {
+      try {b=await withTimeout('https://ipapi.co/json/',3000);}catch(e){errors.push('ipapi '+shortError(e));}
+      const bc=clean(b&&b.city),br=clean(b&&b.region),bn=clean(b&&(b.country_name||b.country));
+      if(bc||br) {city=bc;region=br;country=bn||country;provider='ipapi.co';}
+      else {country=country||bn;}
+    }
+    if(city||region) return {status:'IP estimate',city,region,country,detail:provider+' city/state estimate'};
+    if(country) return {status:'Country only',country,detail:'No city/state; '+errors.join(' / ')};
+    return {status:'Client unavailable',detail:(errors.join(' / ')||'No IP estimate').slice(0,165)};
+  }
+  function geo() {
+    return new Promise(resolve => {
+      if(!window.isSecureContext || !navigator.geolocation) {resolve(null);return;}
+      try {
+        navigator.geolocation.getCurrentPosition(
+          p => resolve(p && p.coords || null),
+          e => resolve(null),
+          {enableHighAccuracy:true,timeout:15000,maximumAge:0}
+        );
+      } catch(_) {resolve(null);}
+    });
+  }
+  function config() {
+    return new Promise(resolve => {
+      let settled=false;
+      const script=document.createElement('script');
+      const timer=setTimeout(() => done({valid:false,gpsEnabled:false}),7000);
+      function done(c){if(settled)return;settled=true;clearTimeout(timer);script.remove();delete window.batesGpsConfig;resolve(c);}
+      window.batesGpsConfig=function(c){done(c||{valid:false,gpsEnabled:false});};
+      script.onerror=function(){done({valid:false,gpsEnabled:false});};
+      script.src=serviceUrl+'?action=gpsConfig&t='+encodeURIComponent(token)+'&_='+Date.now();
+      document.head.appendChild(script);
+    });
+  }
+  async function finalize(position) {
+    if(submitting || redirected) return;
+    submitting=true;
+    message(position ? 'Saving your approved location…' : 'Opening Google Reviews…');
+    const ip = direct && ipPromise ? await ipPromise : {};
+    if(redirected) return;
+    if(position && Number.isFinite(Number(position.latitude)) && Number.isFinite(Number(position.longitude)) && Number.isFinite(Number(position.accuracy))){
+      setField('gpsApproved','yes');
+      setField('latitude',Number(position.latitude).toFixed(7));
+      setField('longitude',Number(position.longitude).toFixed(7));
+      setField('accuracy',position.accuracy);
+    }
+    if(direct){
+      setField('ipStatus',ip.status||'Client unavailable');
+      for(const f of ['city','region','country','detail'])setField(f,ip[f]||'');
+    }
+    try { form.submit(); }
+    catch(_){ reviews(); return; }
+    timeout=setTimeout(reviews,12000);
+  }
+  iframe.addEventListener('load',function(){
+    if(!submitting || redirected) return;
+    let navigated=false;
+    try {navigated=iframe.contentWindow.location.href!=='about:blank';}
+    catch(_) {navigated=true;}
+    if(!navigated)return;
+    clearTimeout(timeout);
+    message('Opening Google Reviews…');
+    setTimeout(reviews,350);
+  });
+  skip.addEventListener('click',function(e){
+    if (direct && !submitting && !redirected) {
+      e.preventDefault(); skipped=true;
+      finalize(null);
+    } else if (legacy && !submitting){
+      skipped=true;
+    }
+  });
+
+  async function start() {
+    if(!uuid.test(visit) || !(direct||legacy)) {
+      message('No valid QR scan was provided. Opening Google Reviews…');
+      setTimeout(reviews,700);
+      return;
+    }
+    if (direct) {
+      ipPromise=ipEstimate();
+      message('Checking your QR code…');
+      const c=await config();
+      if(!c.valid) {message('QR code unavailable. Opening Google Reviews…');setTimeout(reviews,1200);return;}
+      if(!c.gpsEnabled) {await finalize(null);return;}
+    }
+    if(skipped || redirected) return;
+    message('Requesting optional location permission…');
+    const coords=await geo();
+    if(skipped || redirected) return;
+    gpsPosition=coords;
+    await finalize(coords);
+  }
+  start().catch(e=>{message('Opening Google Reviews…');finalize(null).catch(reviews);});
+}());
+</script>
+</body>
+</html>
