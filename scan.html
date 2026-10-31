@@ -110,7 +110,7 @@
   }
   const visit = direct ? randomUUID() : existingVisit;
   setField('action', direct ? 'directScan' : 'shareGPS');
-  setField('t', token);
+  setField('token', token);
   setField('visit', visit);
 
   function withTimeout(url, ms) {
