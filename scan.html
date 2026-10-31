@@ -70,6 +70,7 @@
   const params = new URLSearchParams(location.search);
   const token = params.get('t') || '';
   const existingVisit = params.get('visit') || '';
+  const diagnostic = params.get('debug') === '1';
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const direct = uuid.test(token);
   const legacy = !direct && uuid.test(existingVisit);
@@ -190,10 +191,10 @@
     return new Promise(resolve => {
       let settled=false;
       const script=document.createElement('script');
-      const timer=setTimeout(() => done({valid:false,gpsEnabled:false}),7000);
+      const timer=setTimeout(() => done({valid:false,gpsEnabled:false,reason:'Apps Script configuration did not respond within 7 seconds.'}),7000);
       function done(c){if(settled)return;settled=true;clearTimeout(timer);script.remove();delete window.batesGpsConfig;resolve(c);}
       window.batesGpsConfig=function(c){done(c||{valid:false,gpsEnabled:false});};
-      script.onerror=function(){done({valid:false,gpsEnabled:false});};
+      script.onerror=function(){done({valid:false,gpsEnabled:false,reason:'The Apps Script configuration request was blocked or failed.'});};
       script.src=serviceUrl+'?action=gpsConfig&t='+encodeURIComponent(token)+'&_='+Date.now();
       document.head.appendChild(script);
     });
@@ -247,9 +248,23 @@
       return;
     }
     if (direct) {
-      ipPromise=ipEstimate();
-      message('Checking your QR code…');
+      if(!diagnostic) ipPromise=ipEstimate();
+      message(diagnostic ? 'Testing your QR tracking configuration…' : 'Checking your QR code…');
       const c=await config();
+      if(diagnostic) {
+        document.getElementById('spinner').style.display='none';
+        if(c.valid) {
+          message('Diagnostics: QR token accepted. GPS switch is '+
+            (c.gpsEnabled ? 'ON. The Apps Script V3.4 configuration check is working.' :
+            'OFF. Check Settings!B6 in the QR Tracking spreadsheet.'));
+        } else {
+          message('Diagnostics: QR tracking configuration unavailable. '+
+            (c.reason || 'The deployed Apps Script did not recognize this active QR token.')+
+            ' Save the V3.4 Code.gs, then Deploy > Manage deployments > Edit > New version > Deploy.'+
+            ' If already deployed, the browser may be blocking the configuration script.');
+        }
+        return; // Test-only mode: no location request or scan record
+      }
       if(!c.valid) {message('QR code unavailable. Opening Google Reviews…');setTimeout(reviews,1200);return;}
       if(!c.gpsEnabled) {await finalize(null);return;}
     }
@@ -274,12 +289,14 @@
   }
   // Absolute escape hatch: browsers can delay permissions, network requests,
   // or hidden-iframe navigation. Never trap a customer on the loading page.
-  overallTimeout=setTimeout(function(){
-    if(!redirected) {
-      message('Opening Google Reviews…');
-      reviews();
-    }
-  },36000);
+  if(!diagnostic) {
+    overallTimeout=setTimeout(function(){
+      if(!redirected) {
+        message('Opening Google Reviews…');
+        reviews();
+      }
+    },36000);
+  }
   start().catch(e=>{message('Opening Google Reviews…');finalize(null).catch(reviews);});
 }());
 </script>
