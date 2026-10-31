@@ -83,12 +83,10 @@
   let skipped = false;
   let redirected = false;
   let ipPromise = null;
-  let gpsPosition = null;
   let timeout = null;
   let overallTimeout = null;
   let retryTimeout = null;
   let retryPending = false;
-  let gpsPermissionMessage = "";
 
   function message(s) { info.textContent = s; }
   function reviews() {
@@ -187,18 +185,6 @@
       finalize(result.coords).catch(reviews);
     }).catch(function(){ finalize(null).catch(reviews); });
   });
-  function config() {
-    return new Promise(resolve => {
-      let settled=false;
-      const script=document.createElement('script');
-      const timer=setTimeout(() => done({valid:false,gpsEnabled:false,reason:'Apps Script configuration did not respond within 7 seconds.'}),7000);
-      function done(c){if(settled)return;settled=true;clearTimeout(timer);script.remove();delete window.batesGpsConfig;resolve(c);}
-      window.batesGpsConfig=function(c){done(c||{valid:false,gpsEnabled:false});};
-      script.onerror=function(){done({valid:false,gpsEnabled:false,reason:'The Apps Script configuration request was blocked or failed.'});};
-      script.src=serviceUrl+'?action=gpsConfig&t='+encodeURIComponent(token)+'&_='+Date.now();
-      document.head.appendChild(script);
-    });
-  }
   async function finalize(position) {
     if(submitting || redirected) return;
     submitting=true;
@@ -247,32 +233,26 @@
       setTimeout(reviews,700);
       return;
     }
-    if (direct) {
-      if(!diagnostic) ipPromise=ipEstimate();
-      message(diagnostic ? 'Testing your QR tracking configuration…' : 'Checking your QR code…');
-      const c=await config();
-      if(diagnostic) {
-        document.getElementById('spinner').style.display='none';
-        if(c.valid) {
-          message('Diagnostics: QR token accepted. GPS switch is '+
-            (c.gpsEnabled ? 'ON. The Apps Script V3.4 configuration check is working.' :
-            'OFF. Check Settings!B6 in the QR Tracking spreadsheet.'));
-        } else {
-          message('Diagnostics: QR tracking configuration unavailable. '+
-            (c.reason || 'The deployed Apps Script did not recognize this active QR token.')+
-            ' Save the V3.4 Code.gs, then Deploy > Manage deployments > Edit > New version > Deploy.'+
-            ' If already deployed, the browser may be blocking the configuration script.');
-        }
-        return; // Test-only mode: no location request or scan record
-      }
-      if(!c.valid) {message('QR code unavailable. Opening Google Reviews…');setTimeout(reviews,1200);return;}
-      if(!c.gpsEnabled) {await finalize(null);return;}
+    // Don't block the browser's permission request on a cross-origin Apps Script
+    // JSONP preflight. The existing directScan POST validates the QR token,
+    // verifies Settings!B6, and saves GPS only when the switch is enabled.
+    if (diagnostic) {
+      document.getElementById('spinner').style.display='none';
+      const pState=await permissionState();
+      const secure=window.isSecureContext && !!navigator.geolocation;
+      message('Diagnostics: Browser GPS '+
+        (secure ? 'available' : 'unavailable')+
+        '; permission state: '+pState+
+        '. The page no longer uses the blocked Apps Script configuration request.'+
+        ' This diagnostic does not request location or log a visit.'+
+        ' Test a normal QR scan for actual GPS collection.');
+      return;
     }
+    if(direct) ipPromise=ipEstimate();
     if(skipped || redirected) return;
     message('Requesting optional location permission…');
     const result=await geo();
     if(skipped || redirected) return;
-    gpsPosition=result.coords;
     if(result.coords) {
       await finalize(result.coords);
       return;
