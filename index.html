@@ -37,14 +37,11 @@
   <h2>Optional location sharing</h2>
   <p>You can choose to share your device's current location with Bates for a service-visit record. This is <strong>not required</strong> to leave a Google review.</p>
   <div class="panel">
-    <p><strong>What would be saved?</strong> Latitude, longitude, the device's reported accuracy (in meters), and the associated QR scan/technician.</p>
-    <p class="sub">Your device may use GPS, nearby Wi-Fi, or cell towers. Accuracy varies. A location permission prompt will appear only if you tap the button.</p>
-    <button type="button" class="primary" id="get">Get My Location</button>
-    <p id="message" role="status" aria-live="polite"></p>
-    <div id="confirmed">
-      <p id="accuracy" class="sub"></p>
-      <button type="button" class="primary" id="send">Send Location to Bates</button>
-    </div>
+    <p><strong>You've chosen optional location sharing.</strong></p>
+    <p class="sub">Your phone may now ask for permission to use your location. If you select <strong>Allow</strong>, the location coordinates and the phone's reported accuracy will be sent automatically to Bates for this QR visit. You can select <strong>Don't Allow</strong> instead.</p>
+    <p class="sub">Your device may use GPS, Wi-Fi or cell towers; the accuracy can vary.</p>
+    <p id="message" role="status" aria-live="polite">Starting your one-time location request…</p>
+    <p id="accuracy" class="sub" hidden></p>
   </div>
   <section class="panel help" id="locationHelp" aria-live="polite">
     <strong>iPhone location permission help</strong>
@@ -56,10 +53,11 @@
     </ol>
     <p class="sub">Your device must approve location access. Bates cannot override a denial; sharing remains optional.</p>
   </section>
-  <a class="secondary" href="https://g.page/r/CaOp_u0N2yIzEBM/review?utm_source=gbp&amp;utm_medium=reviews&amp;utm_campaign=qr" rel="noreferrer">Skip Location — Continue to Google Reviews</a>
-  <p class="fine">Only tapping <strong>Send Location to Bates</strong> transmits coordinates to Bates. The page does not continuously monitor your location. Bates stores the coordinates only if the GPS master switch is enabled. The QR scan itself may separately record an approximate internet-based location.</p>
+  <p class="sub" style="text-align:center"><a id="reviewsLink" href="https://g.page/r/CaOp_u0N2yIzEBM/review?utm_source=gbp&amp;utm_medium=reviews&amp;utm_campaign=qr" rel="noreferrer">Skip location and go to Google Reviews</a></p>
+  <p class="fine">You selected <strong>Share My Location</strong> on the Bates review page. If your phone grants location permission, your one-time coordinates and accuracy will be submitted automatically to Bates. Denying location permission will not send coordinates. You can still leave a Google review without sharing. The page does not continuously track your location. The QR scan may separately record an approximate internet-based location.</p>
 </main>
-<form id="submission" method="POST" action="https://script.google.com/macros/s/AKfycbz_6pZS3Ku4H00_ru2cagjq4eNr8lTXmt8lElTarWZTX43uYrA9Ol4Cnz-ZnmERQWBWyg/exec" accept-charset="UTF-8">
+<iframe id="gpsResultFrame" name="gpsResultFrame" src="about:blank" title="Hidden GPS submission response" aria-hidden="true" tabindex="-1" style="display:none"></iframe>
+<form id="submission" method="POST" action="https://script.google.com/macros/s/AKfycbz_6pZS3Ku4H00_ru2cagjq4eNr8lTXmt8lElTarWZTX43uYrA9Ol4Cnz-ZnmERQWBWyg/exec" target="gpsResultFrame" accept-charset="UTF-8">
   <input type="hidden" name="action" value="shareGPS">
   <input type="hidden" name="visit" id="visit">
   <input type="hidden" name="latitude" id="latitude">
@@ -69,72 +67,105 @@
 <script>
 (function () {
   'use strict';
-  const get = document.getElementById('get');
-  const send = document.getElementById('send');
   const msg = document.getElementById('message');
-  const confirmed = document.getElementById('confirmed');
-  const locationHelp = document.getElementById('locationHelp');
+  const help = document.getElementById('locationHelp');
   const accuracyMsg = document.getElementById('accuracy');
+  const frame = document.getElementById('gpsResultFrame');
+  const form = document.getElementById('submission');
+  const reviewUrl = document.getElementById('reviewsLink').href;
   const visit = new URLSearchParams(window.location.search).get('visit') || '';
   const valid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visit);
-  let position = null;
+  let state = 'starting';
+  let timeoutId = null;
+
   document.getElementById('visit').value = visit;
   function message(text) { msg.textContent = text; }
+  function openReviews() { window.location.replace(reviewUrl); }
+
   if (!valid) {
-    get.disabled = true;
-    message('A valid scan link is required to share location. You can still leave a review.');
+    message('This page requires a fresh QR scan. No location request was made. Use the review link below or scan again.');
     return;
   }
   if (!window.isSecureContext || !navigator.geolocation) {
-    get.disabled = true;
-    message('Location access is not available in this browser. Please use the Review link below.');
+    message('This browser cannot request device location. No coordinates were sent. You can still leave a review.');
     return;
   }
-  get.addEventListener('click', function () {
-    get.disabled = true;
-    confirmed.style.display = 'none';
-    send.style.display = 'none';
-    position = null;
-    message('Requesting device location. You may deny permission at any time.');
-    navigator.geolocation.getCurrentPosition(function (result) {
-      const c = result.coords;
-      const latitude = Number(c.latitude);
-      const longitude = Number(c.longitude);
-      const accuracy = Number(c.accuracy);
-      if (![latitude, longitude, accuracy].every(Number.isFinite)) {
-        get.disabled = false;
-        message('The device provided an invalid location. Please try again or skip.');
-        return;
+
+  // Apps Script accepts a normal browser form POST, so avoid CORS-dependent fetch.
+  // The hidden frame keeps the response page from adding another visible button.
+  frame.addEventListener('load', function () {
+    if (state !== 'submitting') return;
+    let navigated = false;
+    try {
+      navigated = frame.contentWindow.location.href !== 'about:blank';
+    } catch (_) {
+      navigated = true; // The POST destination is on a different origin.
+    }
+    if (!navigated) return; // Ignore the initial blank iframe load.
+
+    state = 'complete';
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    message('Location submission finished. Opening Google Reviews…');
+    window.setTimeout(openReviews, 450);
+  });
+
+  function submitOnce(coords) {
+    if (state !== 'locating') return;
+    const lat = Number(coords.latitude);
+    const lon = Number(coords.longitude);
+    const accuracy = Number(coords.accuracy);
+    if (![lat, lon, accuracy].every(Number.isFinite) ||
+        lat < -90 || lat > 90 || lon < -180 || lon > 180 ||
+        accuracy < 0 || accuracy > 100000) {
+      state = 'error';
+      message('Your device did not return valid coordinates. Nothing was sent. You can continue to Google Reviews.');
+      return;
+    }
+    document.getElementById('latitude').value = lat.toFixed(7);
+    document.getElementById('longitude').value = lon.toFixed(7);
+    document.getElementById('accuracyField').value = String(accuracy);
+    accuracyMsg.hidden = false;
+    accuracyMsg.textContent = 'Device-reported accuracy: about ' + Math.round(accuracy) + ' meters.';
+    message('Location permitted. Submitting your coordinates to Bates…');
+    state = 'submitting';
+    try {
+      form.submit();
+    } catch (err) {
+      state = 'error';
+      message('The location submission could not start. You can still leave a review.');
+      return;
+    }
+    timeoutId = window.setTimeout(function () {
+      if (state === 'submitting') {
+        state = 'uncertain';
+        message('The submission is taking longer than expected, so the result cannot be confirmed. You can continue to Google Reviews using the link below.');
       }
-      position = {latitude, longitude, accuracy};
-      accuracyMsg.textContent = 'Device-reported accuracy: about ' + Math.round(accuracy) + ' meters.';
-      message('Location found. It has not been sent yet.');
-      confirmed.style.display = 'block';
-      send.style.display = 'block';
-      get.disabled = false;
-    }, function (err) {
-      get.disabled = false;
-      const words = err.code === 1 ? 'Location permission denied or blocked.' :
-        err.code === 2 ? 'The device could not determine its position.' :
-        err.code === 3 ? 'The location request timed out.' : 'Location unavailable.';
-      const code = Number(err && err.code) || 0;
-      const browserDetail = String(err && err.message || '').trim().slice(0,180);
-      message(words + ' (Error code ' + code + ').' +
-        (browserDetail ? ' Browser details: ' + browserDetail + '.' : '') +
-        ' You can try again or continue to Google Reviews.');
-      locationHelp.style.display = code === 1 ? 'block' : 'none';
-    }, {enableHighAccuracy: true, timeout: 16000, maximumAge: 0});
-  });
-  send.addEventListener('click', function () {
-    if (!position || !valid) return;
-    document.getElementById('latitude').value = position.latitude.toFixed(7);
-    document.getElementById('longitude').value = position.longitude.toFixed(7);
-    document.getElementById('accuracyField').value = String(position.accuracy);
-    send.disabled = true;
-    get.disabled = true;
-    message('Sending your chosen location securely to Bates...');
-    document.getElementById('submission').submit();
-  });
+    }, 20000);
+  }
+
+  function onDenied(err) {
+    if (state !== 'locating') return;
+    state = 'denied';
+    const code = Number(err && err.code) || 0;
+    const words = code === 1 ? 'Location permission was denied or blocked.' :
+      code === 2 ? 'Your device could not determine its location.' :
+      code === 3 ? 'The location request timed out.' : 'Location access was unavailable.';
+    const detail = String(err && err.message || '').trim().slice(0,160);
+    message(words + ' No coordinates were sent. ' +
+      (detail ? 'Browser details: ' + detail + '. ' : '') +
+      'You can continue to Google Reviews.');
+    help.style.display = code === 1 ? 'block' : 'none';
+  }
+
+  // The visitor explicitly selected "Share My Location (Optional)" on the
+  // preceding Bates review page. Permission is still controlled by their phone.
+  state = 'locating';
+  message('Requesting location permission from your phone…');
+  navigator.geolocation.getCurrentPosition(
+    function (position) { submitOnce(position.coords); },
+    onDenied,
+    {enableHighAccuracy: true, timeout: 18000, maximumAge: 0}
+  );
 }());
 </script>
 </body>
