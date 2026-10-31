@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Bates Heating & Air — Optional Location Sharing</title>
+  <style>
+    :root {color-scheme:light}
+    * {box-sizing:border-box}
+    body {font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
+      color:#183451;background:#f4f7fa;margin:0;padding:28px 14px}
+    main {max-width:500px;margin:24px auto;background:#fff;border-radius:16px;
+      padding:28px 24px;box-shadow:0 6px 24px #123d7715}
+    h1 {font-size:25px;margin:0 0 12px;color:#1b3155}
+    h2 {font-size:19px;margin:0 0 12px}
+    p {margin:12px 0}
+    .sub {color:#576577;font-size:14px}
+    .panel {margin:20px 0;padding:15px;border:1px solid #d4dfec;border-radius:9px;background:#f7faff}
+    .primary,.secondary {display:block;width:100%;border-radius:9px;padding:15px;font:inherit;
+      font-weight:700;text-align:center;text-decoration:none;cursor:pointer}
+    .primary {background:#173e76;border:1px solid #173e76;color:white}
+    .secondary {background:white;border:1px solid #173e76;color:#173e76;margin-top:12px}
+    button:disabled {opacity:.55;cursor:default}
+    #message {font-size:14px;margin:12px 0;white-space:pre-wrap}
+    #send {display:none}
+    #confirmed {display:none}
+    .fine {color:#5d6976;font-size:12px;margin-top:22px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Bates Heating & Air</h1>
+  <h2>Optional location sharing</h2>
+  <p>You can choose to share your device's current location with Bates for a service-visit record. This is <strong>not required</strong> to leave a Google review.</p>
+  <div class="panel">
+    <p><strong>What would be saved?</strong> Latitude, longitude, the device's reported accuracy (in meters), and the associated QR scan/technician.</p>
+    <p class="sub">Your device may use GPS, nearby Wi-Fi, or cell towers. Accuracy varies. A location permission prompt will appear only if you tap the button.</p>
+    <button type="button" class="primary" id="get">Get My Location</button>
+    <p id="message" role="status" aria-live="polite"></p>
+    <div id="confirmed">
+      <p id="accuracy" class="sub"></p>
+      <button type="button" class="primary" id="send">Send Location to Bates</button>
+    </div>
+  </div>
+  <a class="secondary" href="https://g.page/r/CaOp_u0N2yIzEBM/review?utm_source=gbp&amp;utm_medium=reviews&amp;utm_campaign=qr" rel="noreferrer">Skip Location — Continue to Google Reviews</a>
+  <p class="fine">Only tapping <strong>Send Location to Bates</strong> transmits coordinates to Bates. The page does not continuously monitor your location. Bates stores the coordinates only if the GPS master switch is enabled. The QR scan itself may separately record an approximate internet-based location.</p>
+</main>
+<form id="submission" method="POST" action="https://script.google.com/macros/s/AKfycbz_6pZS3Ku4H00_ru2cagjq4eNr8lTXmt8lElTarWZTX43uYrA9Ol4Cnz-ZnmERQWBWyg/exec" accept-charset="UTF-8">
+  <input type="hidden" name="action" value="shareGPS">
+  <input type="hidden" name="visit" id="visit">
+  <input type="hidden" name="latitude" id="latitude">
+  <input type="hidden" name="longitude" id="longitude">
+  <input type="hidden" name="accuracy" id="accuracyField">
+</form>
+<script>
+(function () {
+  'use strict';
+  const get = document.getElementById('get');
+  const send = document.getElementById('send');
+  const msg = document.getElementById('message');
+  const confirmed = document.getElementById('confirmed');
+  const accuracyMsg = document.getElementById('accuracy');
+  const visit = new URLSearchParams(window.location.search).get('visit') || '';
+  const valid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(visit);
+  let position = null;
+  document.getElementById('visit').value = visit;
+  function message(text) { msg.textContent = text; }
+  if (!valid) {
+    get.disabled = true;
+    message('A valid scan link is required to share location. You can still leave a review.');
+    return;
+  }
+  if (!window.isSecureContext || !navigator.geolocation) {
+    get.disabled = true;
+    message('Location access is not available in this browser. Please use the Review link below.');
+    return;
+  }
+  get.addEventListener('click', function () {
+    get.disabled = true;
+    confirmed.style.display = 'none';
+    send.style.display = 'none';
+    position = null;
+    message('Requesting device location. You may deny permission at any time.');
+    navigator.geolocation.getCurrentPosition(function (result) {
+      const c = result.coords;
+      const latitude = Number(c.latitude);
+      const longitude = Number(c.longitude);
+      const accuracy = Number(c.accuracy);
+      if (![latitude, longitude, accuracy].every(Number.isFinite)) {
+        get.disabled = false;
+        message('The device provided an invalid location. Please try again or skip.');
+        return;
+      }
+      position = {latitude, longitude, accuracy};
+      accuracyMsg.textContent = 'Device-reported accuracy: about ' + Math.round(accuracy) + ' meters.';
+      message('Location found. It has not been sent yet.');
+      confirmed.style.display = 'block';
+      send.style.display = 'block';
+      get.disabled = false;
+    }, function (err) {
+      get.disabled = false;
+      const words = err.code === 1 ? 'Location permission denied or blocked.' :
+        err.code === 2 ? 'The device could not determine its position.' :
+        err.code === 3 ? 'The location request timed out.' : 'Location unavailable.';
+      message(words + ' You can try again or continue to Google Reviews.');
+    }, {enableHighAccuracy: true, timeout: 16000, maximumAge: 0});
+  });
+  send.addEventListener('click', function () {
+    if (!position || !valid) return;
+    document.getElementById('latitude').value = position.latitude.toFixed(7);
+    document.getElementById('longitude').value = position.longitude.toFixed(7);
+    document.getElementById('accuracyField').value = String(position.accuracy);
+    send.disabled = true;
+    get.disabled = true;
+    message('Sending your chosen location securely to Bates...');
+    document.getElementById('submission').submit();
+  });
+}());
+</script>
+</body>
+</html>
